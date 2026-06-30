@@ -1,9 +1,12 @@
 {
-  "guildId": "1520354094399750144",
-  "vipRoleId": "1521573014309834822",
-  "newbieRoleId": "1521575918198325381",
-  "panelChannelId": "1521560504189845555",
-  "price": 499,
-  "currency": "eur",
-  "productName": "VIP ❤️🫦"
+  "guildId": "REMPLACE_PAR_TON_GUILD_ID",
+  "panelChannelId": "REMPLACE_PAR_TON_CHANNEL_ID",
+  "newbieRoleId": "REMPLACE_PAR_TON_ROLE_NEWBIE_ID",
+  "vipRoleId": "REMPLACE_PAR_TON_ROLE_VIP_ID",
+  "vipPriceCents": 499,
+  "vipCurrency": "eur",
+  "vipProductName": "Accès VIP",
+  "panelTitle": "🔥 Accès VIP",
+  "panelDescription": "Débloque l'accès VIP complet du serveur pour seulement 4.99€.\n\nClique sur le bouton ci-dessous pour payer en toute sécurité via Stripe.",
+  "reglementText": "**Règlement du serveur**\n\n1. Respect entre tous les membres.\n2. Aucun spam, aucune publicité non autorisée.\n3. Le contenu VIP est strictement personnel, ne le partage pas.\n4. Tout abus entraîne une exclusion immédiate sans remboursement.\n5. Le staff se réserve le droit de modifier ce règlement à tout moment."
 }

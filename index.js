@@ -1,123 +1,121 @@
-import "dotenv/config";
-import fs from "fs";
-import express from "express";
-import Stripe from "stripe";
-import {
-  Client,
-  GatewayIntentBits,
-  EmbedBuilder,
-  ActionRowBuilder,
-  ButtonBuilder,
-  ButtonStyle
-} from "discord.js";
+'use strict';
 
-const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
+require('dotenv').config();
 
-const stripe = new Stripe(process.env.STRIPE_SECRET);
+const express = require('express');
+const { client, grantVipAccess } = require('./discord.js');
+const { constructWebhookEvent } = require('./stripe.js');
+
+const REQUIRED_ENV_VARS = [
+  'DISCORD_TOKEN',
+  'STRIPE_SECRET_KEY',
+  'STRIPE_WEBHOOK_SECRET'
+];
+
+for (const key of REQUIRED_ENV_VARS) {
+  if (!process.env[key]) {
+    console.error(`[CONFIG] Variable d'environnement manquante: ${key}`);
+    process.exit(1);
+  }
+}
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// ⚠️ IMPORTANT : webhook doit être raw uniquement
-app.use("/webhook", express.raw({ type: "application/json" }));
+// IMPORTANT : la route webhook doit recevoir le body BRUT (Buffer)
+// pour que la vérification de signature Stripe fonctionne.
+// On la déclare donc AVANT tout express.json() global.
+app.post(
+  '/webhook/stripe',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    const signature = req.headers['stripe-signature'];
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
-  ]
-});
+    let event;
+    try {
+      event = constructWebhookEvent(req.body, signature);
+    } catch (err) {
+      console.error('[WEBHOOK] Signature invalide:', err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
 
-// ================= READY =================
-client.once("ready", async () => {
-  console.log(`✅ Connecté: ${client.user.tag}`);
+    // On répond immédiatement à Stripe pour éviter les timeouts/retry inutiles
+    res.status(200).json({ received: true });
 
-  try {
-    const channel = await client.channels.fetch(config.panelChannelId);
+    try {
+      if (event.type === 'checkout.session.completed') {
+        const session = event.data.object;
 
-    const embed = new EmbedBuilder()
-      .setTitle("💎 VIP ACCESS ❤️🫦")
-      .setDescription("Accès VIP disponible pour 4,99€")
-      .setColor(0xff4da6);
+        if (session.payment_status !== 'paid') {
+          console.warn(`[WEBHOOK] Session ${session.id} reçue mais non payée (status=${session.payment_status}).`);
+          return;
+        }
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setLabel("❤️ Devenir VIP")
-        .setStyle(ButtonStyle.Link)
-        .setURL("https://buy.stripe.com/4gM4gy5i0gA21JVff8ew80h"),
+        const discordId = session.metadata && session.metadata.discordId;
 
-      new ButtonBuilder()
-        .setLabel("📜 Règlement")
-        .setStyle(ButtonStyle.Secondary)
-        .setCustomId("rules")
-    );
+        if (!discordId) {
+          console.error(`[WEBHOOK] Session ${session.id} sans discordId dans metadata. Impossible d'attribuer le rôle VIP.`);
+          return;
+        }
 
-    channel.send({ embeds: [embed], components: [row] });
-  } catch (e) {
-    console.log("Erreur panel:", e);
-  }
-});
-
-// ================= JOIN =================
-client.on("guildMemberAdd", async (member) => {
-  if (member.guild.id !== config.guildId) return;
-
-  try {
-    const role = member.guild.roles.cache.get(config.newbieRoleId);
-    if (role) await member.roles.add(role);
-
-    const channel = await member.guild.channels.fetch(config.panelChannelId);
-    channel.send(`👋 Nouveau membre : ${member.user.tag}`);
-  } catch (e) {
-    console.log("Join error:", e);
-  }
-});
-
-// ================= WEBHOOK STRIPE =================
-app.post("/webhook", (req, res) => {
-  let event;
-
-  try {
-    const signature = req.headers["stripe-signature"];
-
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      signature,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
-  } catch (err) {
-    console.log("❌ Webhook invalide");
-    return res.sendStatus(400);
-  }
-
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    const discordId = session.metadata?.discordId;
-
-    (async () => {
-      try {
-        const guild = await client.guilds.fetch(config.guildId);
-        const member = await guild.members.fetch(discordId);
-
-        const vip = guild.roles.cache.get(config.vipRoleId);
-        const newbie = guild.roles.cache.get(config.newbieRoleId);
-
-        if (newbie) await member.roles.remove(newbie);
-        if (vip) await member.roles.add(vip);
-
-        const channel = await guild.channels.fetch(config.panelChannelId);
-        channel.send(`💎 VIP ACTIVÉ : <@${discordId}>`);
-      } catch (e) {
-        console.log("VIP error:", e);
+        try {
+          await grantVipAccess(discordId);
+          console.log(`[WEBHOOK] Paiement validé et rôle VIP attribué pour discordId=${discordId}`);
+        } catch (err) {
+          console.error(`[WEBHOOK] Erreur attribution rôle VIP pour discordId=${discordId}:`, err.message);
+        }
+      } else {
+        console.log(`[WEBHOOK] Event ignoré: ${event.type}`);
       }
-    })();
+    } catch (err) {
+      console.error('[WEBHOOK] Erreur traitement event:', err);
+    }
   }
+);
 
-  res.json({ received: true });
+// Tout le reste de l'app peut utiliser express.json() normalement
+app.use(express.json());
+
+app.get('/', (req, res) => {
+  res.status(200).send('VIP Discord Bot - OK');
 });
 
-// ================= START =================
-app.listen(process.env.PORT || 3000, () => {
-  console.log("🌐 Server running");
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    discordReady: client.isReady(),
+    uptime: process.uptime()
+  });
 });
 
-client.login(process.env.TOKEN);
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route introuvable' });
+});
+
+app.use((err, req, res, next) => {
+  console.error('[EXPRESS] Erreur non gérée:', err);
+  res.status(500).json({ error: 'Erreur interne du serveur' });
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[PROCESS] Unhandled Rejection:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('[PROCESS] Uncaught Exception:', err);
+});
+
+async function start() {
+  app.listen(PORT, () => {
+    console.log(`[EXPRESS] Serveur webhook démarré sur le port ${PORT}`);
+  });
+
+  try {
+    await client.login(process.env.DISCORD_TOKEN);
+  } catch (err) {
+    console.error('[DISCORD] Échec de connexion du bot:', err);
+    process.exit(1);
+  }
+}
+
+start();

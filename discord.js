@@ -1,6 +1,4 @@
-'use strict';
-
-const {
+import {
   Client,
   GatewayIntentBits,
   Events,
@@ -9,12 +7,16 @@ const {
   ButtonStyle,
   EmbedBuilder,
   PermissionsBitField
-} = require('discord.js');
+} from 'discord.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createCheckoutSession } from './stripe.js';
 
-const config = require('./config.json');
-const { createCheckoutSession } = require('./stripe.js');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf-8'));
 
-const client = new Client({
+export const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers
@@ -144,7 +146,7 @@ async function handleRulesButton(interaction) {
  * Appelé depuis le webhook Stripe après paiement validé.
  * @param {string} discordId
  */
-async function grantVipAccess(discordId) {
+export async function grantVipAccess(discordId) {
   const guild = await client.guilds.fetch(config.guildId);
   if (!guild) {
     throw new Error(`Guild introuvable pour guildId=${config.guildId}`);
@@ -170,8 +172,3 @@ async function grantVipAccess(discordId) {
   console.log(`[DISCORD] Accès VIP accordé à ${member.user.tag} (${discordId})`);
   return member;
 }
-
-module.exports = {
-  client,
-  grantVipAccess
-};

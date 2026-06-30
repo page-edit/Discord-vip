@@ -1,10 +1,7 @@
-'use strict';
-
-require('dotenv').config();
-
-const express = require('express');
-const { client, grantVipAccess } = require('./discord.js');
-const { constructWebhookEvent } = require('./stripe.js');
+import 'dotenv/config';
+import express from 'express';
+import { client, grantVipAccess } from './discord.js';
+import { constructWebhookEvent } from './stripe.js';
 
 const REQUIRED_ENV_VARS = [
   'DISCORD_TOKEN',

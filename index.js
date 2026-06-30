@@ -9,17 +9,21 @@ import {
   ButtonBuilder,
   ButtonStyle
 } from "discord.js";
-import fs from "fs";
 
 const app = express();
 const stripe = new Stripe(process.env.STRIPE_SECRET);
 
-// ⚠️ Webhook Stripe doit être RAW
+// ================= CONFIG DIRECTE =================
+const config = {
+  guildId: "1520354094399750144",
+  vipRoleId: "1521573014309834822",
+  newbieRoleId: "1521575918198325381",
+  panelChannelId: "1521560504189845555"
+};
+
+// ================= EXPRESS =================
 app.use("/webhook", express.raw({ type: "application/json" }));
 app.use(express.json());
-
-// CONFIG (si tu as config.json)
-const config = JSON.parse(fs.readFileSync("./config.json", "utf8"));
 
 // ================= DISCORD =================
 const client = new Client({
@@ -48,20 +52,20 @@ client.once("ready", async () => {
     );
 
     channel.send({ embeds: [embed], components: [row] });
-  } catch (e) {
-    console.log("Panel error:", e);
+  } catch (err) {
+    console.log("Panel error:", err);
   }
 });
 
-// ================= JOIN =================
+// ================= NEW MEMBER =================
 client.on("guildMemberAdd", async (member) => {
   if (member.guild.id !== config.guildId) return;
 
   try {
     const role = member.guild.roles.cache.get(config.newbieRoleId);
     if (role) await member.roles.add(role);
-  } catch (e) {
-    console.log("Join error:", e);
+  } catch (err) {
+    console.log("Role error:", err);
   }
 });
 
@@ -78,7 +82,7 @@ app.post("/webhook", (req, res) => {
       process.env.STRIPE_WEBHOOK_SECRET
     );
   } catch (err) {
-    console.log("❌ Webhook error");
+    console.log("❌ Webhook error:", err.message);
     return res.sendStatus(400);
   }
 
@@ -99,8 +103,8 @@ app.post("/webhook", (req, res) => {
 
         const channel = await guild.channels.fetch(config.panelChannelId);
         channel.send(`💎 VIP ACTIVÉ : <@${discordId}>`);
-      } catch (e) {
-        console.log("VIP error:", e);
+      } catch (err) {
+        console.log("VIP error:", err);
       }
     })();
   }
@@ -108,7 +112,7 @@ app.post("/webhook", (req, res) => {
   res.json({ received: true });
 });
 
-// ================= START SERVER =================
+// ================= START =================
 app.listen(process.env.PORT || 3000, () => {
   console.log("🌐 Server running");
 });

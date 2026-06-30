@@ -1,7 +1,10 @@
-'use strict';
+import Stripe from 'stripe';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const Stripe = require('stripe');
-const config = require('./config.json');
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const config = JSON.parse(fs.readFileSync(path.join(__dirname, 'config.json'), 'utf-8'));
 
 if (!process.env.STRIPE_SECRET_KEY) {
   throw new Error('[STRIPE] STRIPE_SECRET_KEY manquant dans les variables d\'environnement.');
@@ -10,7 +13,7 @@ if (!process.env.STRIPE_WEBHOOK_SECRET) {
   throw new Error('[STRIPE] STRIPE_WEBHOOK_SECRET manquant dans les variables d\'environnement.');
 }
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
+export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: '2024-06-20'
 });
 
@@ -20,7 +23,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
  * @param {string} discordUsername - Username Discord (pour référence dans Stripe).
  * @returns {Promise<import('stripe').Stripe.Checkout.Session>}
  */
-async function createCheckoutSession(discordId, discordUsername) {
+export async function createCheckoutSession(discordId, discordUsername) {
   if (!discordId) {
     throw new Error('[STRIPE] discordId requis pour créer une session Checkout.');
   }
@@ -60,16 +63,10 @@ async function createCheckoutSession(discordId, discordUsername) {
  * @param {string} signature - Header 'stripe-signature'.
  * @returns {import('stripe').Stripe.Event}
  */
-function constructWebhookEvent(rawBody, signature) {
+export function constructWebhookEvent(rawBody, signature) {
   return stripe.webhooks.constructEvent(
     rawBody,
     signature,
     process.env.STRIPE_WEBHOOK_SECRET
   );
 }
-
-module.exports = {
-  stripe,
-  createCheckoutSession,
-  constructWebhookEvent
-};

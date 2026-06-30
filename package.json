@@ -1,15 +1,19 @@
 {
-  "name": "discord-vip-bot",
-  "version": "2.1.0",
-  "type": "module",
+  "name": "vip-discord-bot",
+  "version": "1.0.0",
+  "description": "Bot Discord VIP avec paiement Stripe automatisé",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
-    "discord.js": "^14.16.3",
-    "express": "^4.19.2",
+    "discord.js": "^14.15.3",
     "dotenv": "^16.4.5",
-    "stripe": "^16.0.0"
+    "express": "^4.19.2",
+    "stripe": "^16.8.0"
   }
 }

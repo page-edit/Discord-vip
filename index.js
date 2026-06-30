@@ -48,7 +48,7 @@ client.once("ready", async () => {
       new ButtonBuilder()
         .setLabel("❤️ Devenir VIP")
         .setStyle(ButtonStyle.Link)
-        .setURL("https://buy.stripe.com/4gM4gy5i0gA21JVff8ew80h")
+        .setURL("https://buy.stripe.com/test_eVq9AS4dW3Ng1JVeb4ew808")
     );
 
     channel.send({ embeds: [embed], components: [row] });

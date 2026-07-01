@@ -11,6 +11,7 @@ import {
 } from "discord.js";
 
 const app = express();
+
 const stripe = new Stripe(process.env.STRIPE_SECRET);
 
 // ================= CONFIG =================
@@ -21,12 +22,15 @@ const config = {
   baseUrl: "https://discord-vip.onrender.com"
 };
 
-// ================= EXPRESS =================
+// ================= DISCORD BOT =================
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
+});
 
+// ================= EXPRESS =================
 // IMPORTANT: webhook raw BEFORE json
 app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
   let event;
-
   try {
     event = stripe.webhooks.constructEvent(
       req.body,
@@ -41,12 +45,10 @@ app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
   // ================= PAYMENT SUCCESS =================
   if (event.type === "checkout.session.completed") {
     const discordId = event.data.object.metadata?.discordId;
-
     console.log("PAYMENT SUCCESS FOR:", discordId);
 
     try {
       const guild = await client.guilds.fetch(config.guildId);
-
       const member = await guild.members.fetch(discordId).catch(() => null);
       if (!member) return res.sendStatus(404);
 
@@ -55,7 +57,6 @@ app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
 
       const channel = await guild.channels.fetch(config.panelChannelId);
       channel.send(`💎 VIP ACTIVÉ : <@${discordId}>`);
-
     } catch (err) {
       console.log("VIP ERROR:", err.message);
     }
@@ -66,11 +67,7 @@ app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
 
 app.use(express.json());
 
-// ================= DISCORD BOT =================
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
-});
-
+// ================= BOT READY =================
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
@@ -115,10 +112,8 @@ client.on("interactionCreate", async (interaction) => {
           quantity: 1
         }
       ],
-
       success_url: "https://discord.com/app",
       cancel_url: "https://discord.com/app",
-
       metadata: {
         discordId
       }
@@ -136,7 +131,6 @@ client.on("interactionCreate", async (interaction) => {
         )
       ]
     });
-
   } catch (err) {
     console.log("Stripe error:", err.message);
     return interaction.reply({

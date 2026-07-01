@@ -17,15 +17,13 @@ const stripe = new Stripe(process.env.STRIPE_SECRET);
 const config = {
   guildId: "1520354094399750144",
   vipRoleId: "1521573014309834822",
-  panelChannelId: "1521560504189845555"
+  panelChannelId: "1521560504189845555",
+  baseUrl: "https://discord-vip.onrender.com"
 };
 
 // ================= EXPRESS =================
-app.get("/", (req, res) => {
-  res.send("VIP BOT ONLINE");
-});
 
-// ⚠️ IMPORTANT: webhook avant json
+// IMPORTANT: webhook raw BEFORE json
 app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
   let event;
 
@@ -40,20 +38,20 @@ app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
     return res.sendStatus(400);
   }
 
+  // ================= PAYMENT SUCCESS =================
   if (event.type === "checkout.session.completed") {
-    const discordId = event.data.object.metadata.discordId;
+    const discordId = event.data.object.metadata?.discordId;
 
-    console.log("PAYMENT OK FOR:", discordId);
+    console.log("PAYMENT SUCCESS FOR:", discordId);
 
     try {
       const guild = await client.guilds.fetch(config.guildId);
-      const member = await guild.members.fetch(discordId);
+
+      const member = await guild.members.fetch(discordId).catch(() => null);
+      if (!member) return res.sendStatus(404);
 
       const vipRole = guild.roles.cache.get(config.vipRoleId);
-
-      if (vipRole) {
-        await member.roles.add(vipRole);
-      }
+      if (vipRole) await member.roles.add(vipRole);
 
       const channel = await guild.channels.fetch(config.panelChannelId);
       channel.send(`💎 VIP ACTIVÉ : <@${discordId}>`);
@@ -67,42 +65,6 @@ app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
 });
 
 app.use(express.json());
-
-// ================= STRIPE CHECKOUT =================
-app.get("/create-checkout/:discordId", async (req, res) => {
-  const discordId = req.params.discordId;
-
-  try {
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: "eur",
-            product_data: {
-              name: "VIP Discord"
-            },
-            unit_amount: 499
-          },
-          quantity: 1
-        }
-      ],
-
-      success_url: "https://discord.com/app",
-      cancel_url: "https://discord.com/app",
-
-      metadata: {
-        discordId
-      }
-    });
-
-    return res.redirect(303, session.url);
-  } catch (err) {
-    console.log("Stripe error:", err.message);
-    return res.status(500).send("Stripe error");
-  }
-});
 
 // ================= DISCORD BOT =================
 const client = new Client({
@@ -121,15 +83,70 @@ client.once("ready", async () => {
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
+      .setCustomId("buy_vip")
       .setLabel("💳 Devenir VIP")
-      .setStyle(ButtonStyle.Link)
-      .setURL(`https://discord-vip.onrender.com/create-checkout/${client.user.id}`)
+      .setStyle(ButtonStyle.Primary)
   );
 
   await channel.send({ embeds: [embed], components: [row] });
 });
 
-// ================= START =================
+// ================= BUTTON CLICK =================
+client.on("interactionCreate", async (interaction) => {
+  if (!interaction.isButton()) return;
+  if (interaction.customId !== "buy_vip") return;
+
+  // ✅ USER QUI CLIQUE
+  const discordId = interaction.user.id;
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: "eur",
+            product_data: {
+              name: "VIP Discord 💎"
+            },
+            unit_amount: 499
+          },
+          quantity: 1
+        }
+      ],
+
+      success_url: "https://discord.com/app",
+      cancel_url: "https://discord.com/app",
+
+      metadata: {
+        discordId
+      }
+    });
+
+    return interaction.reply({
+      ephemeral: true,
+      content: "💳 Clique pour finaliser ton paiement",
+      components: [
+        new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setLabel("Payer VIP")
+            .setStyle(ButtonStyle.Link)
+            .setURL(session.url)
+        )
+      ]
+    });
+
+  } catch (err) {
+    console.log("Stripe error:", err.message);
+    return interaction.reply({
+      content: "Erreur Stripe",
+      ephemeral: true
+    });
+  }
+});
+
+// ================= START SERVER =================
 app.listen(process.env.PORT || 3000, () => {
   console.log("Server running");
 });

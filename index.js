@@ -21,8 +21,18 @@ const config = {
   panelChannelId: "1521560504189845555"
 };
 
+// ================= MIDDLEWARE =================
+// IMPORTANT: Stripe webhook doit utiliser raw AVANT express.json
+app.use("/webhook", express.raw({ type: "application/json" }));
+app.use(express.json());
+
+// ================= ROUTE HOME (FIX 404) =================
+app.get("/", (req, res) => {
+  res.send("💎 Discord VIP bot actif sur Render ✅");
+});
+
 // ================= STRIPE WEBHOOK =================
-app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
+app.post("/webhook", (req, res) => {
   let event;
 
   try {
@@ -56,7 +66,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
         const channel = await guild.channels.fetch(config.panelChannelId);
         channel.send(`💎 VIP ACTIVÉ : <@${discordId}>`);
       } catch (err) {
-        console.log("VIP error:", err);
+        console.log("VIP error:", err.message);
       }
     })();
   }
@@ -64,9 +74,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
   res.json({ received: true });
 });
 
-app.use(express.json());
-
-// ================= DISCORD =================
+// ================= DISCORD BOT =================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -89,13 +97,13 @@ client.once("ready", async () => {
     );
 
     if (alreadyExists) {
-      console.log("ℹ️ VIP panel already exists");
+      console.log("ℹ️ Panel déjà existant");
       return;
     }
 
     const embed = new EmbedBuilder()
-      .setTitle("💎 VIP ACCESS ❤️🫦")
-      .setDescription("Clique ici pour devenir VIP (4,99€)")
+      .setTitle("💎 VIP ACCESS ❤️")
+      .setDescription("Clique ci-dessous pour devenir VIP (4,99€)")
       .setColor(0xff4da6);
 
     const row = new ActionRowBuilder().addComponents(
@@ -112,7 +120,7 @@ client.once("ready", async () => {
 
     await msg.pin().catch(() => {});
   } catch (err) {
-    console.log("Panel error:", err);
+    console.log("Panel error:", err.message);
   }
 });
 
@@ -127,7 +135,7 @@ app.get("/create-checkout/:discordId", async (req, res) => {
           price_data: {
             currency: "eur",
             product_data: {
-              name: "VIP Discord ❤️🫦"
+              name: "VIP Discord 💎"
             },
             unit_amount: 499
           },
@@ -141,16 +149,18 @@ app.get("/create-checkout/:discordId", async (req, res) => {
       }
     });
 
-    return res.redirect(session.url);
+    return res.redirect(303, session.url);
   } catch (err) {
-    console.log("Stripe error:", err);
+    console.log("Stripe error:", err.message);
     return res.status(500).send("Stripe error");
   }
 });
 
 // ================= START SERVER =================
-app.listen(process.env.PORT || 3000, () => {
-  console.log("🌐 Server running");
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, () => {
+  console.log("🌐 Server running on port", PORT);
 });
 
 client.login(process.env.TOKEN);

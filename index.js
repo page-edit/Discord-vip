@@ -26,19 +26,58 @@ app.get("/", (req, res) => {
   res.send("💎 VIP BOT ONLINE");
 });
 
-// Stripe webhook must be raw
-app.use("/webhook", express.raw({ type: "*/*" }));
-app.use(express.json());
+// IMPORTANT STRIPE WEBHOOK RAW
+app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
+  let event;
+
+  try {
+    const signature = req.headers["stripe-signature"];
+
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      signature,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.log("Webhook error:", err.message);
+    return res.sendStatus(400);
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const discordId = session.metadata?.discordId;
+
+    if (!discordId) return res.sendStatus(400);
+
+    try {
+      const guild = await client.guilds.fetch(config.guildId);
+
+      const member = await guild.members.fetch(discordId).catch(() => null);
+      if (!member) return res.sendStatus(404);
+
+      const vipRole = guild.roles.cache.get(config.vipRoleId);
+      const newbieRole = guild.roles.cache.get(config.newbieRoleId);
+
+      if (newbieRole) await member.roles.remove(newbieRole).catch(() => {});
+      if (vipRole) await member.roles.add(vipRole).catch(() => {});
+
+      const channel = await guild.channels.fetch(config.panelChannelId);
+      channel.send(`💎 VIP ACTIVÉ : <@${discordId}>`);
+    } catch (err) {
+      console.log("VIP ERROR:", err.message);
+    }
+  }
+
+  res.json({ received: true });
+});
 
 // ================= STRIPE CHECKOUT =================
 app.get("/create-checkout", async (req, res) => {
+  const discordId = req.query.discordId;
+
+  if (!discordId) return res.status(400).send("Missing discordId");
+
   try {
-    const discordId = req.query.discordId;
-
-    if (!discordId) {
-      return res.status(400).send("Missing discordId");
-    }
-
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
@@ -68,55 +107,6 @@ app.get("/create-checkout", async (req, res) => {
   }
 });
 
-// ================= WEBHOOK STRIPE =================
-app.post("/webhook", (req, res) => {
-  let event;
-
-  try {
-    const signature = req.headers["stripe-signature"];
-
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      signature,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
-  } catch (err) {
-    console.log("Webhook error:", err.message);
-    return res.sendStatus(400);
-  }
-
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    const discordId = session.metadata?.discordId;
-
-    if (!discordId) return res.sendStatus(400);
-
-    (async () => {
-      try {
-        const guild = await client.guilds.fetch(config.guildId);
-
-        const member = await guild.members.fetch({
-          user: discordId,
-          force: true
-        });
-
-        const vipRole = guild.roles.cache.get(config.vipRoleId);
-        const newbieRole = guild.roles.cache.get(config.newbieRoleId);
-
-        if (newbieRole) await member.roles.remove(newbieRole).catch(() => {});
-        if (vipRole) await member.roles.add(vipRole).catch(() => {});
-
-        const channel = await guild.channels.fetch(config.panelChannelId);
-        channel.send(`💎 VIP ACTIVÉ : <@${discordId}>`);
-      } catch (err) {
-        console.log("VIP ERROR:", err.message);
-      }
-    })();
-  }
-
-  res.json({ received: true });
-});
-
 // ================= DISCORD BOT =================
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
@@ -125,34 +115,64 @@ const client = new Client({
 client.once("ready", async () => {
   console.log(`Logged in as ${client.user.tag}`);
 
-  try {
-    const channel = await client.channels.fetch(config.panelChannelId);
+  const channel = await client.channels.fetch(config.panelChannelId);
 
-    const embed = new EmbedBuilder()
-      .setTitle("💎 VIP ACCESS")
-      .setDescription("Clique pour devenir VIP (4,99€)")
-      .setColor(0xff4da6);
+  const embed = new EmbedBuilder()
+    .setTitle("💎 VIP ACCESS")
+    .setDescription("Clique pour devenir VIP (4,99€)")
+    .setColor(0xff4da6);
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setLabel("Devenir VIP")
-        .setStyle(ButtonStyle.Link)
-        .setURL(
-          `https://discord-vip.onrender.com/create-checkout?discordId=1521346062546374797`
-        )
-    );
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel("Devenir VIP")
+      .setStyle(ButtonStyle.Primary)
+      .setCustomId("vip_button")
+  );
 
-    channel.send({ embeds: [embed], components: [row] });
-  } catch (err) {
-    console.log("Panel error:", err.message);
-  }
+  const msg = await channel.send({
+    embeds: [embed],
+    components: [row]
+  });
+
+  const collector = channel.createMessageComponentCollector();
+
+  collector.on("collect", async (interaction) => {
+    if (interaction.customId === "vip_button") {
+      const userId = interaction.user.id;
+
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        payment_method_types: ["card"],
+        line_items: [
+          {
+            price_data: {
+              currency: "eur",
+              product_data: {
+                name: "VIP Discord 💎"
+              },
+              unit_amount: 499
+            },
+            quantity: 1
+          }
+        ],
+        success_url: "https://discord.com",
+        cancel_url: "https://discord.com",
+        metadata: {
+          discordId: userId
+        }
+      });
+
+      await interaction.reply({
+        content: `👉 Paiement ici : ${session.url}`,
+        ephemeral: true
+      });
+    }
+  });
 });
 
 // ================= START =================
-const PORT = process.env.PORT || 3000;
-
-app.listen(PORT, () => {
-  console.log("Server running on port", PORT);
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Server running");
 });
 
 client.login(process.env.TOKEN);

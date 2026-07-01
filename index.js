@@ -21,8 +21,7 @@ const config = {
   panelChannelId: "1521560504189845555"
 };
 
-// ================= MIDDLEWARE =================
-// IMPORTANT Stripe webhook raw body
+// ================= STRIPE WEBHOOK (RAW) =================
 app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
   let event;
 
@@ -83,7 +82,7 @@ client.once("ready", async () => {
 
     const embed = new EmbedBuilder()
       .setTitle("💎 VIP ACCESS ❤️🫦")
-      .setDescription("Accès VIP 4,99€")
+      .setDescription("Clique ici pour devenir VIP (4,99€)")
       .setColor(0xff4da6);
 
     const row = new ActionRowBuilder().addComponents(
@@ -99,7 +98,32 @@ client.once("ready", async () => {
   }
 });
 
-// ================= STRIPE CHECKOUT PRO =================
+// ================= NEW MEMBER JOIN =================
+client.on("guildMemberAdd", async (member) => {
+  try {
+    if (member.guild.id !== config.guildId) return;
+
+    const channel = await client.channels.fetch(config.panelChannelId);
+
+    const embed = new EmbedBuilder()
+      .setTitle("💎 VIP ACCESS ❤️🫦")
+      .setDescription("Bienvenue 👋\nClique ici pour accéder au VIP (4,99€)")
+      .setColor(0xff4da6);
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel("❤️ Devenir VIP")
+        .setStyle(ButtonStyle.Link)
+        .setURL(`https://discord-vip.onrender.com/create-checkout/${member.id}`)
+    );
+
+    channel.send({ embeds: [embed], components: [row] });
+  } catch (err) {
+    console.log("Join error:", err);
+  }
+});
+
+// ================= STRIPE CHECKOUT =================
 app.get("/create-checkout/:discordId", async (req, res) => {
   try {
     const session = await stripe.checkout.sessions.create({
@@ -126,7 +150,7 @@ app.get("/create-checkout/:discordId", async (req, res) => {
 
     return res.redirect(session.url);
   } catch (err) {
-    console.log(err);
+    console.log("Stripe error:", err);
     return res.status(500).send("Stripe error");
   }
 });

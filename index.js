@@ -21,112 +21,24 @@ const config = {
   panelChannelId: "1521560504189845555"
 };
 
-// ================= MIDDLEWARE =================
-// IMPORTANT: Stripe webhook doit utiliser raw AVANT express.json
-app.use("/webhook", express.raw({ type: "application/json" }));
+// ================= EXPRESS =================
+app.get("/", (req, res) => {
+  res.send("💎 VIP BOT ONLINE");
+});
+
+// Stripe webhook must be raw
+app.use("/webhook", express.raw({ type: "*/*" }));
 app.use(express.json());
 
-// ================= ROUTE HOME (FIX 404) =================
-app.get("/", (req, res) => {
-  res.send("💎 Discord VIP bot actif sur Render ✅");
-});
-
-// ================= STRIPE WEBHOOK =================
-app.post("/webhook", (req, res) => {
-  let event;
-
+// ================= STRIPE CHECKOUT =================
+app.get("/create-checkout", async (req, res) => {
   try {
-    const signature = req.headers["stripe-signature"];
+    const discordId = req.query.discordId;
 
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      signature,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
-  } catch (err) {
-    console.log("❌ Webhook error:", err.message);
-    return res.sendStatus(400);
-  }
-
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    const discordId = session.metadata?.discordId;
-
-    (async () => {
-      try {
-        const guild = await client.guilds.fetch(config.guildId);
-        const member = await guild.members.fetch(discordId);
-
-        const vip = guild.roles.cache.get(config.vipRoleId);
-        const newbie = guild.roles.cache.get(config.newbieRoleId);
-
-        if (newbie) await member.roles.remove(newbie);
-        if (vip) await member.roles.add(vip);
-
-        const channel = await guild.channels.fetch(config.panelChannelId);
-        channel.send(`💎 VIP ACTIVÉ : <@${discordId}>`);
-      } catch (err) {
-        console.log("VIP error:", err.message);
-      }
-    })();
-  }
-
-  res.json({ received: true });
-});
-
-// ================= DISCORD BOT =================
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers
-  ]
-});
-
-client.once("ready", async () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-
-  try {
-    const channel = await client.channels.fetch(config.panelChannelId);
-
-    const messages = await channel.messages.fetch({ limit: 10 });
-
-    const alreadyExists = messages.find(m =>
-      m.author.id === client.user.id &&
-      m.embeds.length > 0 &&
-      m.embeds[0].title?.includes("VIP ACCESS")
-    );
-
-    if (alreadyExists) {
-      console.log("ℹ️ Panel déjà existant");
-      return;
+    if (!discordId) {
+      return res.status(400).send("Missing discordId");
     }
 
-    const embed = new EmbedBuilder()
-      .setTitle("💎 VIP ACCESS ❤️")
-      .setDescription("Clique ci-dessous pour devenir VIP (4,99€)")
-      .setColor(0xff4da6);
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setLabel("❤️ Devenir VIP")
-        .setStyle(ButtonStyle.Link)
-        .setURL(`https://discord-vip.onrender.com/create-checkout/${config.guildId}`)
-    );
-
-    const msg = await channel.send({
-      embeds: [embed],
-      components: [row]
-    });
-
-    await msg.pin().catch(() => {});
-  } catch (err) {
-    console.log("Panel error:", err.message);
-  }
-});
-
-// ================= STRIPE CHECKOUT =================
-app.get("/create-checkout/:discordId", async (req, res) => {
-  try {
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       payment_method_types: ["card"],
@@ -142,25 +54,105 @@ app.get("/create-checkout/:discordId", async (req, res) => {
           quantity: 1
         }
       ],
-      success_url: "https://discord.com/channels/@me",
+      success_url: "https://discord.com",
       cancel_url: "https://discord.com",
       metadata: {
-        discordId: req.params.discordId
+        discordId
       }
     });
 
-    return res.redirect(303, session.url);
+    res.redirect(303, session.url);
   } catch (err) {
     console.log("Stripe error:", err.message);
-    return res.status(500).send("Stripe error");
+    res.status(500).send("Stripe error");
   }
 });
 
-// ================= START SERVER =================
+// ================= WEBHOOK STRIPE =================
+app.post("/webhook", (req, res) => {
+  let event;
+
+  try {
+    const signature = req.headers["stripe-signature"];
+
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      signature,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.log("Webhook error:", err.message);
+    return res.sendStatus(400);
+  }
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object;
+    const discordId = session.metadata?.discordId;
+
+    if (!discordId) return res.sendStatus(400);
+
+    (async () => {
+      try {
+        const guild = await client.guilds.fetch(config.guildId);
+
+        const member = await guild.members.fetch({
+          user: discordId,
+          force: true
+        });
+
+        const vipRole = guild.roles.cache.get(config.vipRoleId);
+        const newbieRole = guild.roles.cache.get(config.newbieRoleId);
+
+        if (newbieRole) await member.roles.remove(newbieRole).catch(() => {});
+        if (vipRole) await member.roles.add(vipRole).catch(() => {});
+
+        const channel = await guild.channels.fetch(config.panelChannelId);
+        channel.send(`💎 VIP ACTIVÉ : <@${discordId}>`);
+      } catch (err) {
+        console.log("VIP ERROR:", err.message);
+      }
+    })();
+  }
+
+  res.json({ received: true });
+});
+
+// ================= DISCORD BOT =================
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
+});
+
+client.once("ready", async () => {
+  console.log(`Logged in as ${client.user.tag}`);
+
+  try {
+    const channel = await client.channels.fetch(config.panelChannelId);
+
+    const embed = new EmbedBuilder()
+      .setTitle("💎 VIP ACCESS")
+      .setDescription("Clique pour devenir VIP (4,99€)")
+      .setColor(0xff4da6);
+
+    const row = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel("Devenir VIP")
+        .setStyle(ButtonStyle.Link)
+        .setURL(
+          `https://discord-vip.onrender.com/create-checkout?discordId=1521346062546374797`
+        )
+    );
+
+    channel.send({ embeds: [embed], components: [row] });
+  } catch (err) {
+    console.log("Panel error:", err.message);
+  }
+});
+
+// ================= START =================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("🌐 Server running on port", PORT);
+  console.log("Server running on port", PORT);
 });
 
 client.login(process.env.TOKEN);

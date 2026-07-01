@@ -28,7 +28,7 @@ app.get("/", (req, res) => {
   res.send("💎 VIP BOT ONLINE");
 });
 
-// ================= STRIPE CHECKOUT =================
+// ================= STRIPE CHECKOUT (AUTO USER) =================
 app.get("/create-checkout", async (req, res) => {
   const discordId = req.query.discordId;
 
@@ -128,54 +128,14 @@ client.once("ready", async () => {
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setLabel("Devenir VIP")
-      .setStyle(ButtonStyle.Primary)
-      .setCustomId("vip_buy")
+      .setLabel("💳 Payer VIP")
+      .setStyle(ButtonStyle.Link)
+      .setURL(
+        `https://discord-vip.onrender.com/create-checkout?discordId=${client.user.id}`
+      )
   );
 
   await channel.send({ embeds: [embed], components: [row] });
-
-  const collector = channel.createMessageComponentCollector();
-
-  collector.on("collect", async (interaction) => {
-    if (interaction.customId !== "vip_buy") return;
-
-    const userId = interaction.user.id;
-
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: "eur",
-            product_data: {
-              name: "VIP Discord 💎"
-            },
-            unit_amount: 499
-          },
-          quantity: 1
-        }
-      ],
-
-      success_url: "https://discord.com/app",
-      cancel_url: "https://discord.com/app",
-
-      metadata: {
-        discordId: userId
-      }
-    });
-
-    await interaction.reply({
-      content: "💳 Paiement en cours...",
-      ephemeral: true
-    });
-
-    await interaction.followUp({
-      content: session.url,
-      ephemeral: true
-    });
-  });
 });
 
 // ================= START =================

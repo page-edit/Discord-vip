@@ -21,7 +21,7 @@ const config = {
   panelChannelId: "1521560504189845555"
 };
 
-// ================= STRIPE WEBHOOK (RAW) =================
+// ================= STRIPE WEBHOOK =================
 app.post("/webhook", express.raw({ type: "application/json" }), (req, res) => {
   let event;
 
@@ -80,6 +80,19 @@ client.once("ready", async () => {
   try {
     const channel = await client.channels.fetch(config.panelChannelId);
 
+    const messages = await channel.messages.fetch({ limit: 10 });
+
+    const alreadyExists = messages.find(m =>
+      m.author.id === client.user.id &&
+      m.embeds.length > 0 &&
+      m.embeds[0].title?.includes("VIP ACCESS")
+    );
+
+    if (alreadyExists) {
+      console.log("ℹ️ VIP panel already exists");
+      return;
+    }
+
     const embed = new EmbedBuilder()
       .setTitle("💎 VIP ACCESS ❤️🫦")
       .setDescription("Clique ici pour devenir VIP (4,99€)")
@@ -92,34 +105,14 @@ client.once("ready", async () => {
         .setURL(`https://discord-vip.onrender.com/create-checkout/${config.guildId}`)
     );
 
-    channel.send({ embeds: [embed], components: [row] });
+    const msg = await channel.send({
+      embeds: [embed],
+      components: [row]
+    });
+
+    await msg.pin().catch(() => {});
   } catch (err) {
     console.log("Panel error:", err);
-  }
-});
-
-// ================= NEW MEMBER JOIN =================
-client.on("guildMemberAdd", async (member) => {
-  try {
-    if (member.guild.id !== config.guildId) return;
-
-    const channel = await client.channels.fetch(config.panelChannelId);
-
-    const embed = new EmbedBuilder()
-      .setTitle("💎 VIP ACCESS ❤️🫦")
-      .setDescription("Bienvenue 👋\nClique ici pour accéder au VIP (4,99€)")
-      .setColor(0xff4da6);
-
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setLabel("❤️ Devenir VIP")
-        .setStyle(ButtonStyle.Link)
-        .setURL(`https://discord-vip.onrender.com/create-checkout/${member.id}`)
-    );
-
-    channel.send({ embeds: [embed], components: [row] });
-  } catch (err) {
-    console.log("Join error:", err);
   }
 });
 
@@ -155,7 +148,7 @@ app.get("/create-checkout/:discordId", async (req, res) => {
   }
 });
 
-// ================= START =================
+// ================= START SERVER =================
 app.listen(process.env.PORT || 3000, () => {
   console.log("🌐 Server running");
 });

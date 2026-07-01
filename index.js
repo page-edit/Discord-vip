@@ -24,18 +24,8 @@ const config = {
 // ================= EXPRESS =================
 app.use(express.json());
 
-// Home
 app.get("/", (req, res) => {
   res.send("💎 VIP BOT ONLINE");
-});
-
-// Success / Cancel pages (UX propre)
-app.get("/success", (req, res) => {
-  res.send("💎 Paiement réussi ! Ton VIP sera activé automatiquement sur Discord.");
-});
-
-app.get("/cancel", (req, res) => {
-  res.send("❌ Paiement annulé. Tu peux réessayer sur Discord.");
 });
 
 // ================= STRIPE CHECKOUT =================
@@ -60,14 +50,15 @@ app.get("/create-checkout", async (req, res) => {
           quantity: 1
         }
       ],
-      success_url: "https://discord-vip.onrender.com/success",
-      cancel_url: "https://discord-vip.onrender.com/cancel",
+
+      success_url: "https://discord.com/app",
+      cancel_url: "https://discord.com/app",
+
       metadata: {
         discordId
       }
     });
 
-    // IMPORTANT: redirect propre (pas affichage lien)
     return res.redirect(303, session.url);
   } catch (err) {
     console.log("Stripe error:", err.message);
@@ -166,16 +157,17 @@ client.once("ready", async () => {
           quantity: 1
         }
       ],
-      success_url: "https://discord-vip.onrender.com/success",
-      cancel_url: "https://discord-vip.onrender.com/cancel",
+
+      success_url: "https://discord.com/app",
+      cancel_url: "https://discord.com/app",
+
       metadata: {
         discordId: userId
       }
     });
 
-    // UX PROPRE : pas de lien visible brut
     await interaction.reply({
-      content: "💳 Clique ici pour payer ton VIP",
+      content: "💳 Paiement en cours...",
       ephemeral: true
     });
 

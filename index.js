@@ -22,11 +22,60 @@ const config = {
 };
 
 // ================= EXPRESS =================
+app.use(express.json());
+
+// Home
 app.get("/", (req, res) => {
   res.send("💎 VIP BOT ONLINE");
 });
 
-// IMPORTANT STRIPE WEBHOOK RAW
+// Success / Cancel pages (UX propre)
+app.get("/success", (req, res) => {
+  res.send("💎 Paiement réussi ! Ton VIP sera activé automatiquement sur Discord.");
+});
+
+app.get("/cancel", (req, res) => {
+  res.send("❌ Paiement annulé. Tu peux réessayer sur Discord.");
+});
+
+// ================= STRIPE CHECKOUT =================
+app.get("/create-checkout", async (req, res) => {
+  const discordId = req.query.discordId;
+
+  if (!discordId) return res.status(400).send("Missing discordId");
+
+  try {
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: "eur",
+            product_data: {
+              name: "VIP Discord 💎"
+            },
+            unit_amount: 499
+          },
+          quantity: 1
+        }
+      ],
+      success_url: "https://discord-vip.onrender.com/success",
+      cancel_url: "https://discord-vip.onrender.com/cancel",
+      metadata: {
+        discordId
+      }
+    });
+
+    // IMPORTANT: redirect propre (pas affichage lien)
+    return res.redirect(303, session.url);
+  } catch (err) {
+    console.log("Stripe error:", err.message);
+    return res.status(500).send("Stripe error");
+  }
+});
+
+// ================= STRIPE WEBHOOK =================
 app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
   let event;
 
@@ -71,42 +120,6 @@ app.post("/webhook", express.raw({ type: "*/*" }), async (req, res) => {
   res.json({ received: true });
 });
 
-// ================= STRIPE CHECKOUT =================
-app.get("/create-checkout", async (req, res) => {
-  const discordId = req.query.discordId;
-
-  if (!discordId) return res.status(400).send("Missing discordId");
-
-  try {
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      payment_method_types: ["card"],
-      line_items: [
-        {
-          price_data: {
-            currency: "eur",
-            product_data: {
-              name: "VIP Discord 💎"
-            },
-            unit_amount: 499
-          },
-          quantity: 1
-        }
-      ],
-      success_url: "https://discord.com",
-      cancel_url: "https://discord.com",
-      metadata: {
-        discordId
-      }
-    });
-
-    res.redirect(303, session.url);
-  } catch (err) {
-    console.log("Stripe error:", err.message);
-    res.status(500).send("Stripe error");
-  }
-});
-
 // ================= DISCORD BOT =================
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers]
@@ -126,47 +139,50 @@ client.once("ready", async () => {
     new ButtonBuilder()
       .setLabel("Devenir VIP")
       .setStyle(ButtonStyle.Primary)
-      .setCustomId("vip_button")
+      .setCustomId("vip_buy")
   );
 
-  const msg = await channel.send({
-    embeds: [embed],
-    components: [row]
-  });
+  await channel.send({ embeds: [embed], components: [row] });
 
   const collector = channel.createMessageComponentCollector();
 
   collector.on("collect", async (interaction) => {
-    if (interaction.customId === "vip_button") {
-      const userId = interaction.user.id;
+    if (interaction.customId !== "vip_buy") return;
 
-      const session = await stripe.checkout.sessions.create({
-        mode: "payment",
-        payment_method_types: ["card"],
-        line_items: [
-          {
-            price_data: {
-              currency: "eur",
-              product_data: {
-                name: "VIP Discord 💎"
-              },
-              unit_amount: 499
+    const userId = interaction.user.id;
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: "eur",
+            product_data: {
+              name: "VIP Discord 💎"
             },
-            quantity: 1
-          }
-        ],
-        success_url: "https://discord.com",
-        cancel_url: "https://discord.com",
-        metadata: {
-          discordId: userId
+            unit_amount: 499
+          },
+          quantity: 1
         }
-      });
+      ],
+      success_url: "https://discord-vip.onrender.com/success",
+      cancel_url: "https://discord-vip.onrender.com/cancel",
+      metadata: {
+        discordId: userId
+      }
+    });
 
-      await interaction.reply({
-        content: `👉 Paiement ici : ${session.url}`,
-        ephemeral: true
-      });
-    }
+    // UX PROPRE : pas de lien visible brut
+    await interaction.reply({
+      content: "💳 Clique ici pour payer ton VIP",
+      ephemeral: true
+    });
+
+    await interaction.followUp({
+      content: session.url,
+      ephemeral: true
+    });
   });
 });
 

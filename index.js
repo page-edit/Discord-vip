@@ -40,11 +40,9 @@ const client = new Client({
 });
 
 // ================= STOCKAGE EN MÉMOIRE =================
-// Liste des membres déjà contactés (évite les doublons)
 const contactedMembers = new Set();
 
 // ================= EXPRESS =================
-// IMPORTANT: webhook raw BEFORE json parser
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   let event;
   try {
@@ -58,7 +56,6 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // ================= PAYMENT SUCCESS =================
   if (event.type === "checkout.session.completed") {
     const discordId = event.data.object.metadata?.discordId;
     console.log("PAYMENT SUCCESS FOR:", discordId);
@@ -85,7 +82,6 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
         console.log("VIP role not found");
       }
 
-      // MP de confirmation
       try {
         const user = await client.users.fetch(discordId);
         await user.send("🎉 **VIP activé !** Tu as maintenant accès au rôle VIP sur le serveur.");
@@ -102,16 +98,13 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     }
   }
 
-  // Toujours répondre 200 à Stripe pour éviter les retries
   res.json({ received: true });
 });
 
-// JSON parser pour les autres routes
 app.use(express.json());
 
 // ================= FONCTION : ENVOYER LE MP VIP =================
 async function sendVIPMessage(member) {
-  // Évite les doublons
   if (contactedMembers.has(member.id)) {
     console.log(`ℹ️ ${member.user.tag} déjà contacté, skip`);
     return;
@@ -163,7 +156,6 @@ client.once(Events.ClientReady, async () => {
     const channel = await guild.channels.fetch(config.panelChannelId);
     console.log(channel ? `✅ Salon trouvé : ${channel.name}` : `❌ Salon INTROUVABLE`);
 
-    // ========== RATTRAPAGE : ENVOYER AUX MEMBRES SANS VIP ==========
     console.log("🔍 Rattrapage : envoi aux membres sans VIP...");
 
     const members = await guild.members.fetch();
@@ -171,16 +163,11 @@ client.once(Events.ClientReady, async () => {
     let skippedCount = 0;
 
     for (const [id, member] of members) {
-      // Skip les bots
       if (member.user.bot) continue;
-
-      // Skip ceux qui ont déjà le rôle VIP
       if (member.roles.cache.has(config.vipRoleId)) {
         skippedCount++;
         continue;
       }
-
-      // Skip ceux déjà contactés dans cette session
       if (contactedMembers.has(id)) {
         skippedCount++;
         continue;
@@ -188,14 +175,11 @@ client.once(Events.ClientReady, async () => {
 
       await sendVIPMessage(member);
       sentCount++;
-
-      // Petite pause pour éviter le rate limit Discord
       await new Promise(r => setTimeout(r, 500));
     }
 
-    console.log(`📊 Rattrapage terminé : ${sentCount} MP envoyés, ${skippedCount} ignorés (déjà VIP ou bots)`);
+    console.log(`📊 Rattrapage terminé : ${sentCount} MP envoyés, ${skippedCount} ignorés`);
 
-    // ========== PANEL DANS LE SALON ==========
     if (channel instanceof TextChannel) {
       const messages = await channel.messages.fetch({ limit: 10 });
       const existingPanel = messages.find(m =>
@@ -228,7 +212,7 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
-// ================= BUTTON CLICK =================
+// ================= BUTTON CLICK - CORRIGÉ =================
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
   if (interaction.customId !== "buy_vip") return;
@@ -236,7 +220,12 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const discordId = interaction.user.id;
 
   try {
-    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+    // ✅ CORRECTION : reply immédiate pour éviter "Échec de l'interaction"
+    // On envoie d'abord un message temporaire, puis on met à jour
+    await interaction.reply({
+      content: "⏳ Création du lien de paiement...",
+      flags: MessageFlags.Ephemeral
+    });
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -258,6 +247,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
       metadata: { discordId }
     });
 
+    // ✅ Met à jour le message avec le vrai lien
     await interaction.editReply({
       content: "💳 Clique pour finaliser ton paiement",
       components: [

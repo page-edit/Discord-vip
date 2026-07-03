@@ -20,7 +20,9 @@ const config = {
   guildId: "1520354094399750144",
   vipRoleId: "1521573014309834822",
   panelChannelId: "1521560504189845555",
-  baseUrl: "https://discord-vip.onrender.com"
+  baseUrl: "https://discord-vip.onrender.com",
+  kickDelayMs: 2 * 60 * 60 * 1000,      // 2 heures = 7 200 000 ms
+  warningDelayMs: 1 * 60 * 60 * 1000    // 1 heure = 3 600 000 ms (avertissement)
 };
 
 // ================= STRIPE =================
@@ -42,6 +44,9 @@ const client = new Client({
 // ================= STOCKAGE EN MÉMOIRE =================
 const contactedMembers = new Set();
 
+// Map: discordId -> { joinTimestamp, warningTimerId, kickTimerId }
+const pendingPayments = new Map();
+
 // ================= EXPRESS =================
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   let event;
@@ -56,6 +61,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
+  // ================= PAYMENT SUCCESS =================
   if (event.type === "checkout.session.completed") {
     const discordId = event.data.object.metadata?.discordId;
     console.log("PAYMENT SUCCESS FOR:", discordId);
@@ -63,6 +69,15 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     if (!discordId) {
       console.log("No discordId in metadata");
       return res.json({ received: true });
+    }
+
+    // ✅ ANNULER LES TIMERS (warning + kick)
+    const pending = pendingPayments.get(discordId);
+    if (pending) {
+      clearTimeout(pending.warningTimerId);
+      clearTimeout(pending.kickTimerId);
+      pendingPayments.delete(discordId);
+      console.log(`⏰ Timers annulés pour ${discordId} (paiement reçu)`);
     }
 
     try {
@@ -115,7 +130,7 @@ async function sendVIPMessage(member) {
       .setTitle("💎 VIP ACCESS")
       .setDescription("Bienvenue ! Deviens VIP pour seulement **4,99€** et accède à des avantages exclusifs.")
       .setColor(0xff4da6)
-      .setFooter({ text: "Clique sur le bouton ci-dessous pour payer" });
+      .setFooter({ text: "⚠️ Tu as 2 heures pour payer, sinon tu seras exclu du serveur." });
 
     const row = new ActionRowBuilder().addComponents(
       new ButtonBuilder()
@@ -132,11 +147,130 @@ async function sendVIPMessage(member) {
   }
 }
 
+// ================= FONCTION : AVERTISSEMENT À 1H =================
+function scheduleWarning(member) {
+  const warningTimerId = setTimeout(async () => {
+    try {
+      const pending = pendingPayments.get(member.id);
+      if (!pending) return; // Déjà payé ou annulé
+
+      const guild = await client.guilds.fetch(config.guildId);
+      const currentMember = await guild.members.fetch(member.id).catch(() => null);
+
+      if (!currentMember) {
+        console.log(`👤 ${member.user.tag} déjà parti, pas d'avertissement`);
+        pendingPayments.delete(member.id);
+        return;
+      }
+
+      if (currentMember.roles.cache.has(config.vipRoleId)) {
+        console.log(`✅ ${member.user.tag} a déjà le VIP, avertissement annulé`);
+        pendingPayments.delete(member.id);
+        return;
+      }
+
+      // MP d'avertissement
+      try {
+        const embed = new EmbedBuilder()
+          .setTitle("⏰ Plus qu'1 heure !")
+          .setDescription("Tu n'as toujours pas payé ton accès VIP.
+
+**Il te reste 1 heure** avant d'être exclu du serveur.")
+          .setColor(0xffaa00)
+          .setFooter({ text: "Clique sur le bouton ci-dessous pour payer maintenant" });
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("buy_vip")
+            .setLabel("💳 Payer VIP - 4,99€")
+            .setStyle(ButtonStyle.Primary)
+        );
+
+        await currentMember.send({ embeds: [embed], components: [row] });
+        console.log(`⚠️ Avertissement envoyé à ${member.user.tag} (1h restante)`);
+      } catch (dmErr) {
+        console.log(`❌ DM avertissement impossible pour ${member.user.tag}:`, dmErr.message);
+      }
+    } catch (err) {
+      console.log(`❌ Erreur avertissement ${member.user.tag}:`, err.message);
+    }
+  }, config.warningDelayMs);
+
+  return warningTimerId;
+}
+
+// ================= FONCTION : KICK À 2H =================
+function scheduleKick(member) {
+  const existing = pendingPayments.get(member.id);
+  if (existing) {
+    clearTimeout(existing.warningTimerId);
+    clearTimeout(existing.kickTimerId);
+    console.log(`⏰ Anciens timers annulés pour ${member.user.tag}`);
+  }
+
+  const joinTimestamp = Date.now();
+
+  // Timer avertissement (1h)
+  const warningTimerId = scheduleWarning(member);
+
+  // Timer kick (2h)
+  const kickTimerId = setTimeout(async () => {
+    try {
+      const guild = await client.guilds.fetch(config.guildId);
+      const currentMember = await guild.members.fetch(member.id).catch(() => null);
+
+      if (!currentMember) {
+        console.log(`👤 ${member.user.tag} déjà parti, pas de kick nécessaire`);
+        pendingPayments.delete(member.id);
+        return;
+      }
+
+      if (currentMember.roles.cache.has(config.vipRoleId)) {
+        console.log(`✅ ${member.user.tag} a déjà le VIP, kick annulé`);
+        pendingPayments.delete(member.id);
+        return;
+      }
+
+      // MP d'avertissement avant kick
+      try {
+        await currentMember.send("⏰ **Temps écoulé !** Tu n'as pas payé dans les 2 heures. Tu vas être exclu du serveur.");
+      } catch (dmErr) {
+        console.log("DM kick warning failed:", dmErr.message);
+      }
+
+      // Kick
+      await currentMember.kick("Paiement non reçu dans les 2 heures");
+      console.log(`🚫 ${member.user.tag} KICKÉ (non payé après 2h)`);
+
+      // Log dans le salon
+      const channel = await guild.channels.fetch(config.panelChannelId);
+      if (channel instanceof TextChannel) {
+        await channel.send(`🚫 **${member.user.tag}** a été exclu (paiement non reçu dans les 2h)`);
+      }
+
+      pendingPayments.delete(member.id);
+    } catch (err) {
+      console.log(`❌ Erreur kick ${member.user.tag}:`, err.message);
+      pendingPayments.delete(member.id);
+    }
+  }, config.kickDelayMs);
+
+  pendingPayments.set(member.id, {
+    joinTimestamp,
+    warningTimerId,
+    kickTimerId
+  });
+
+  console.log(`⏰ Avertissement programmé dans 1h + Kick programmé dans 2h pour ${member.user.tag}`);
+}
+
 // ================= NOUVEAU MEMBRE =================
 client.on(Events.GuildMemberAdd, async (member) => {
   if (member.guild.id !== config.guildId) return;
   console.log(`👋 Nouveau membre : ${member.user.tag} (${member.id})`);
+
   await sendVIPMessage(member);
+  scheduleKick(member);
 });
 
 // ================= BOT READY : RATTRAPAGE =================
@@ -174,6 +308,7 @@ client.once(Events.ClientReady, async () => {
       }
 
       await sendVIPMessage(member);
+      scheduleKick(member);
       sentCount++;
       await new Promise(r => setTimeout(r, 500));
     }
@@ -212,7 +347,7 @@ client.once(Events.ClientReady, async () => {
   }
 });
 
-// ================= BUTTON CLICK - CORRIGÉ =================
+// ================= BUTTON CLICK =================
 client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
   if (interaction.customId !== "buy_vip") return;
@@ -220,8 +355,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
   const discordId = interaction.user.id;
 
   try {
-    // ✅ CORRECTION : reply immédiate pour éviter "Échec de l'interaction"
-    // On envoie d'abord un message temporaire, puis on met à jour
     await interaction.reply({
       content: "⏳ Création du lien de paiement...",
       flags: MessageFlags.Ephemeral
@@ -247,7 +380,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
       metadata: { discordId }
     });
 
-    // ✅ Met à jour le message avec le vrai lien
     await interaction.editReply({
       content: "💳 Clique pour finaliser ton paiement",
       components: [

@@ -9,11 +9,11 @@ import {
   ButtonBuilder,
   ButtonStyle,
   TextChannel,
-  DMChannel
+  MessageFlags,
+  Events
 } from "discord.js";
 
 const app = express();
-const stripe = new Stripe(process.env.STRIPE_SECRET);
 
 // ================= CONFIG =================
 const config = {
@@ -23,16 +23,28 @@ const config = {
   baseUrl: "https://discord-vip.onrender.com"
 };
 
+// ================= STRIPE =================
+const stripe = new Stripe(process.env.STRIPE_SECRET, {
+  maxNetworkRetries: 3,
+  timeout: 30000
+});
+
 // ================= DISCORD BOT =================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
-    GatewayIntentBits.DirectMessages
+    GatewayIntentBits.DirectMessages,
+    GatewayIntentBits.GuildMessages
   ]
 });
 
+// ================= STOCKAGE EN MÉMOIRE =================
+// Liste des membres déjà contactés (évite les doublons)
+const contactedMembers = new Set();
+
 // ================= EXPRESS =================
+// IMPORTANT: webhook raw BEFORE json parser
 app.post("/webhook", express.raw({ type: "application/json" }), async (req, res) => {
   let event;
   try {
@@ -46,6 +58,7 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
+  // ================= PAYMENT SUCCESS =================
   if (event.type === "checkout.session.completed") {
     const discordId = event.data.object.metadata?.discordId;
     console.log("PAYMENT SUCCESS FOR:", discordId);
@@ -89,17 +102,20 @@ app.post("/webhook", express.raw({ type: "application/json" }), async (req, res)
     }
   }
 
+  // Toujours répondre 200 à Stripe pour éviter les retries
   res.json({ received: true });
 });
 
+// JSON parser pour les autres routes
 app.use(express.json());
 
-// ================= NOUVEAU MEMBRE = ENVOI MP =================
-client.on("guildMemberAdd", async (member) => {
-  // Vérifie que c'est le bon serveur
-  if (member.guild.id !== config.guildId) return;
-
-  console.log(`👋 Nouveau membre : ${member.user.tag} (${member.id})`);
+// ================= FONCTION : ENVOYER LE MP VIP =================
+async function sendVIPMessage(member) {
+  // Évite les doublons
+  if (contactedMembers.has(member.id)) {
+    console.log(`ℹ️ ${member.user.tag} déjà contacté, skip`);
+    return;
+  }
 
   try {
     const embed = new EmbedBuilder()
@@ -116,14 +132,22 @@ client.on("guildMemberAdd", async (member) => {
     );
 
     await member.send({ embeds: [embed], components: [row] });
-    console.log(`✅ MP envoyé à ${member.user.tag}`);
+    contactedMembers.add(member.id);
+    console.log(`✅ MP VIP envoyé à ${member.user.tag}`);
   } catch (err) {
-    console.log(`❌ Impossible d'envoyer un MP à ${member.user.tag}:`, err.message);
+    console.log(`❌ MP impossible pour ${member.user.tag}:`, err.message);
   }
+}
+
+// ================= NOUVEAU MEMBRE =================
+client.on(Events.GuildMemberAdd, async (member) => {
+  if (member.guild.id !== config.guildId) return;
+  console.log(`👋 Nouveau membre : ${member.user.tag} (${member.id})`);
+  await sendVIPMessage(member);
 });
 
-// ================= BOT READY =================
-client.once("ready", async () => {
+// ================= BOT READY : RATTRAPAGE =================
+client.once(Events.ClientReady, async () => {
   console.log(`✅ Bot connecté : ${client.user.tag}`);
   console.log(`📋 Guild ID : ${config.guildId}`);
   console.log(`💎 Role ID : ${config.vipRoleId}`);
@@ -139,46 +163,80 @@ client.once("ready", async () => {
     const channel = await guild.channels.fetch(config.panelChannelId);
     console.log(channel ? `✅ Salon trouvé : ${channel.name}` : `❌ Salon INTROUVABLE`);
 
-    // Panel dans le salon (optionnel, pour les anciens membres)
-    const messages = await channel.messages.fetch({ limit: 10 });
-    const existingPanel = messages.find(m =>
-      m.author.id === client.user.id &&
-      m.embeds.length > 0 &&
-      m.embeds[0].title === "💎 VIP ACCESS"
-    );
+    // ========== RATTRAPAGE : ENVOYER AUX MEMBRES SANS VIP ==========
+    console.log("🔍 Rattrapage : envoi aux membres sans VIP...");
 
-    if (!existingPanel) {
-      const embed = new EmbedBuilder()
-        .setTitle("💎 VIP ACCESS")
-        .setDescription("Clique pour devenir VIP (4,99€)")
-        .setColor(0xff4da6);
+    const members = await guild.members.fetch();
+    let sentCount = 0;
+    let skippedCount = 0;
 
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setCustomId("buy_vip")
-          .setLabel("💳 Devenir VIP")
-          .setStyle(ButtonStyle.Primary)
+    for (const [id, member] of members) {
+      // Skip les bots
+      if (member.user.bot) continue;
+
+      // Skip ceux qui ont déjà le rôle VIP
+      if (member.roles.cache.has(config.vipRoleId)) {
+        skippedCount++;
+        continue;
+      }
+
+      // Skip ceux déjà contactés dans cette session
+      if (contactedMembers.has(id)) {
+        skippedCount++;
+        continue;
+      }
+
+      await sendVIPMessage(member);
+      sentCount++;
+
+      // Petite pause pour éviter le rate limit Discord
+      await new Promise(r => setTimeout(r, 500));
+    }
+
+    console.log(`📊 Rattrapage terminé : ${sentCount} MP envoyés, ${skippedCount} ignorés (déjà VIP ou bots)`);
+
+    // ========== PANEL DANS LE SALON ==========
+    if (channel instanceof TextChannel) {
+      const messages = await channel.messages.fetch({ limit: 10 });
+      const existingPanel = messages.find(m =>
+        m.author.id === client.user.id &&
+        m.embeds.length > 0 &&
+        m.embeds[0].title === "💎 VIP ACCESS"
       );
 
-      await channel.send({ embeds: [embed], components: [row] });
-      console.log("✅ Panel envoyé dans le salon");
-    } else {
-      console.log("ℹ️ Panel déjà présent dans le salon");
+      if (!existingPanel) {
+        const embed = new EmbedBuilder()
+          .setTitle("💎 VIP ACCESS")
+          .setDescription("Clique pour devenir VIP (4,99€)")
+          .setColor(0xff4da6);
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId("buy_vip")
+            .setLabel("💳 Devenir VIP")
+            .setStyle(ButtonStyle.Primary)
+        );
+
+        await channel.send({ embeds: [embed], components: [row] });
+        console.log("✅ Panel envoyé dans le salon");
+      } else {
+        console.log("ℹ️ Panel déjà présent dans le salon");
+      }
     }
   } catch (err) {
     console.log("❌ ERREUR READY:", err.message);
   }
 });
 
-// ================= BUTTON CLICK (MP + Salon) =================
-client.on("interactionCreate", async (interaction) => {
+// ================= BUTTON CLICK =================
+client.on(Events.InteractionCreate, async (interaction) => {
   if (!interaction.isButton()) return;
   if (interaction.customId !== "buy_vip") return;
 
   const discordId = interaction.user.id;
 
   try {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -213,6 +271,8 @@ client.on("interactionCreate", async (interaction) => {
     });
   } catch (err) {
     console.log("Stripe error:", err.message);
+    console.log("Stripe error type:", err.type);
+    console.log("Stripe error code:", err.code);
 
     if (interaction.replied || interaction.deferred) {
       await interaction.editReply({
@@ -221,7 +281,7 @@ client.on("interactionCreate", async (interaction) => {
     } else {
       await interaction.reply({
         content: "❌ Erreur Stripe",
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       }).catch(() => {});
     }
   }

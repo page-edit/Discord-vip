@@ -1,6 +1,8 @@
 require("dotenv").config();
 const express = require("express");
 const Stripe = require("stripe");
+const fs = require("fs");
+const path = require("path");
 const {
   Client,
   GatewayIntentBits,
@@ -41,8 +43,30 @@ const client = new Client({
   ]
 });
 
-// ================= STOCKAGE EN MÉMOIRE =================
-const contactedMembers = new Set();
+// ================= PERSISTANCE FICHIER =================
+const CONTACTED_FILE = path.join(__dirname, "contacted.json");
+
+function loadContacted() {
+  try {
+    if (fs.existsSync(CONTACTED_FILE)) {
+      const data = JSON.parse(fs.readFileSync(CONTACTED_FILE, "utf8"));
+      return new Set(data);
+    }
+  } catch (err) {
+    console.log("Erreur chargement contacted.json:", err.message);
+  }
+  return new Set();
+}
+
+function saveContacted() {
+  try {
+    fs.writeFileSync(CONTACTED_FILE, JSON.stringify([...contactedMembers]), "utf8");
+  } catch (err) {
+    console.log("Erreur sauvegarde contacted.json:", err.message);
+  }
+}
+
+const contactedMembers = loadContacted();
 const pendingPayments = new Map();
 
 // ================= EXPRESS =================
@@ -118,7 +142,7 @@ app.use(express.json());
 async function sendVIPMessage(member) {
   if (contactedMembers.has(member.id)) {
     console.log(member.user.tag + " deja contacte, skip");
-    return;
+    return false;
   }
 
   try {
@@ -137,9 +161,12 @@ async function sendVIPMessage(member) {
 
     await member.send({ embeds: [embed], components: [row] });
     contactedMembers.add(member.id);
+    saveContacted();
     console.log("MP VIP envoye a " + member.user.tag);
+    return true;
   } catch (err) {
     console.log("MP impossible pour " + member.user.tag + ":", err.message);
+    return false;
   }
 }
 
@@ -250,14 +277,64 @@ function scheduleKick(member) {
   console.log("Avertissement dans 1h + Kick dans 2h pour " + member.user.tag);
 }
 
-// ================= NOUVEAU MEMBRE =================
+// ================= NOUVEAU MEMBRE (en temps reel) =================
 client.on(Events.GuildMemberAdd, async (member) => {
   if (member.guild.id !== config.guildId) return;
-  console.log("Nouveau membre : " + member.user.tag);
+  console.log("Nouveau membre (temps reel) : " + member.user.tag);
 
-  await sendVIPMessage(member);
-  scheduleKick(member);
+  const sent = await sendVIPMessage(member);
+  if (sent) {
+    scheduleKick(member);
+  }
 });
+
+// ================= RATTRAPAGE AU DEMARRAGE =================
+async function runCatchUp() {
+  console.log("=== RATTRAPAGE DEMARRE ===");
+  
+  try {
+    const guild = await client.guilds.fetch(config.guildId);
+    const members = await guild.members.fetch();
+    
+    let sentCount = 0;
+    let skippedCount = 0;
+    let vipCount = 0;
+    
+    for (const [id, member] of members) {
+      if (member.user.bot) {
+        skippedCount++;
+        continue;
+      }
+      
+      if (member.roles.cache.has(config.vipRoleId)) {
+        vipCount++;
+        skippedCount++;
+        continue;
+      }
+      
+      if (contactedMembers.has(id)) {
+        skippedCount++;
+        continue;
+      }
+      
+      // Nouveau membre non contacte : envoyer MP + timer
+      const sent = await sendVIPMessage(member);
+      if (sent) {
+        scheduleKick(member);
+        sentCount++;
+      }
+      
+      // Petit delai pour eviter le rate limit
+      await new Promise(r => setTimeout(r, 500));
+    }
+    
+    console.log("=== RATTRAPAGE TERMINE ===");
+    console.log("Envoyes: " + sentCount + " | Skipped (deja contacte/VIP/bot): " + skippedCount + " | VIP: " + vipCount);
+    
+  } catch (err) {
+    console.log("ERREUR RATTRAPAGE:", err.message);
+  }
+}
 
 // ================= BOT READY =================
 client.once(Events.ClientReady, async () => {
@@ -273,30 +350,12 @@ client.once(Events.ClientReady, async () => {
     const channel = await guild.channels.fetch(config.panelChannelId);
     console.log(channel ? "Salon : " + channel.name : "Salon INTROUVABLE");
 
-    console.log("Rattrapage en cours...");
-    const members = await guild.members.fetch();
-    let sentCount = 0;
-    let skippedCount = 0;
+    console.log("Membres deja contactes (persistes) : " + contactedMembers.size);
 
-    for (const [id, member] of members) {
-      if (member.user.bot) continue;
-      if (member.roles.cache.has(config.vipRoleId)) {
-        skippedCount++;
-        continue;
-      }
-      if (contactedMembers.has(id)) {
-        skippedCount++;
-        continue;
-      }
+    // Rattrapage : contacte uniquement les nouveaux arrivants pendant le offline
+    await runCatchUp();
 
-      await sendVIPMessage(member);
-      scheduleKick(member);
-      sentCount++;
-      await new Promise(r => setTimeout(r, 500));
-    }
-
-    console.log("Rattrapage : " + sentCount + " envoyes, " + skippedCount + " ignores");
-
+    // Panel dans le salon (envoye une seule fois)
     if (channel instanceof TextChannel) {
       const messages = await channel.messages.fetch({ limit: 10 });
       const existingPanel = messages.find(m =>
